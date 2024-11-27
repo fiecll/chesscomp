@@ -133,6 +133,27 @@ PIECE_SQUARE_TABLES = {
     ]
 }
 
+IMBALANCE_SELF = {
+    'Bishop pair': [1438, 0, 0, 0, 0, 0],
+    'pawn': [40, 38, 0, 0, 0, 0],
+    'knight': [32, 255, -62, 0, 0, 0],
+    'bishop': [0, 104, 4, 0, 0, 0],
+    'rook': [-25, -2, 47, 105, -208, 0],
+    'queen': [-189, 24, 117, 133, -134, -6]
+}
+
+IMBALANCE_OPPONENT = {
+    'Bishop pair': [0, 0, 0, 0, 0, 0],
+    'pawn': [36, 0, 0, 0, 0, 0],
+    'knight': [9, 63, 0, 0, 0, 0],
+    'bishop': [59, 65, 42, 0, 0, 0],
+    'rook': [46, 39, 24, -24, 0, 0],
+    'queen': [97, 100, -42, 137, 268, 0]
+}
+
+
+
+
 def get_piece_value(piece, phase="mid"):
     """駒の価値を返す。フェーズによって価値を切り替える"""
     piece = piece.upper()
@@ -148,6 +169,75 @@ def determine_phase(game):
     total_pieces = sum(1 for char in fen if char.upper() in "PNBRQ")
     return "mid" if total_pieces > 20 else "late"
 
+def calculate_imbalance_score(piece_counts_self, piece_counts_opponent):
+    """
+    不均衡スコアを計算する
+
+    Args:
+        piece_counts_self: 自駒の数を保持する辞書 {'pawn': 3, 'knight': 2, ...}
+        piece_counts_opponent: 相手駒の数を保持する辞書 {'pawn': 4, 'knight': 1, ...}
+
+    Returns:
+        int: 不均衡スコア
+    """
+    score = 0
+
+    # 自駒内の不均衡スコアを計算
+    for i, (piece_self, count_self) in enumerate(piece_counts_self.items()):
+        for j, (piece_other, count_other) in enumerate(piece_counts_self.items()):
+            if count_self > 0 and count_other > 0:
+                value = IMBALANCE_SELF.get(piece_self, [0] * 6)[j]
+                score += count_self * count_other * value
+
+    # 自駒と相手駒間の不均衡スコアを計算
+    for i, (piece_self, count_self) in enumerate(piece_counts_self.items()):
+        for j, (piece_other, count_other) in enumerate(piece_counts_opponent.items()):
+            if count_self > 0 and count_other > 0:
+                value = IMBALANCE_OPPONENT.get(piece_self, [0] * 6)[j]
+                score += count_self * count_other * value
+
+    return score
+
+def count_pieces(board):
+    """
+    駒の数をカウントする
+
+    Args:
+        board: FEN形式の盤面状態
+
+    Returns:
+        (dict, dict): 自駒と相手駒の数を保持する辞書
+    """
+    piece_counts_self = {'pawn': 0, 'knight': 0, 'bishop': 0, 'rook': 0, 'queen': 0, 'Bishop pair': 0}
+    piece_counts_opponent = {'pawn': 0, 'knight': 0, 'bishop': 0, 'rook': 0, 'queen': 0, 'Bishop pair': 0}
+
+    for char in board.replace('/', ''):
+        if char.isdigit():
+            continue
+        elif char.isupper():  # 自駒
+            piece = piece_name(char)
+            if piece:  # None でなければカウント
+                piece_counts_self[piece] += 1
+        elif char.islower():  # 相手駒
+            piece = piece_name(char.upper())
+            if piece:  # None でなければカウント
+                piece_counts_opponent[piece] += 1
+
+    # ビショップペアの判定
+    if piece_counts_self['bishop'] >= 2:
+        piece_counts_self['Bishop pair'] = 1
+    if piece_counts_opponent['bishop'] >= 2:
+        piece_counts_opponent['Bishop pair'] = 1
+
+    return piece_counts_self, piece_counts_opponent
+
+
+
+def piece_name(char):
+    """駒の文字を名前に変換"""
+    mapping = {'P': 'pawn', 'N': 'knight', 'B': 'bishop', 'R': 'rook', 'Q': 'queen'}
+    return mapping.get(char, None)  # 不明な駒は None を返す
+
 
 def evaluate_board(game, phase="mid"):
     """
@@ -156,29 +246,31 @@ def evaluate_board(game, phase="mid"):
     fen = str(game).split()[0]
     score = 0
 
-    # FENを行ごとに解析
+    # 基本スコア（駒の価値 + 位置スコア）
     for i, char in enumerate(fen.replace('/', '')):
         if char.isdigit():  # 空白（数字）をスキップ
             continue
-
-        # 駒の価値を加算
         value = get_piece_value(char, phase)
         score += value if char.isupper() else -value
 
-        # 位置評価を加算
+        # 位置評価
         table_key = char.lower() + ("_late" if phase == "late" else "_mid")
         if table_key in PIECE_SQUARE_TABLES:
             table = PIECE_SQUARE_TABLES[table_key]
             position_value = table[i] if char.isupper() else -table[63 - i]
             score += position_value
 
+    # 不均衡スコアを加算
+    piece_counts_self, piece_counts_opponent = count_pieces(fen)
+    imbalance_score = calculate_imbalance_score(piece_counts_self, piece_counts_opponent)
+    score += imbalance_score
+
     return score
 
 
+
 def chess_bot(obs):
-    """
-    フェーズに応じて盤面を評価して最適な手を選ぶチェスボット
-    """
+
     game = Game(obs.board)
     moves = list(game.get_moves())
 
